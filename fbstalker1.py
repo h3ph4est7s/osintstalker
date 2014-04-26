@@ -503,7 +503,9 @@ def parseTimeline(html, username):
                 continue
             if "posts" in tlLink:
                 #print tlLink.strip()
+                tlLink = tlLink.replace("?stream_ref=10", "")
                 pageID = tlLink.split("/")
+
 
                 parsePost(pageID[3], username)
                 peopleIDLikes = parseLikesPosts(pageID[3])
