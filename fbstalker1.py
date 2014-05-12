@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 from __future__ import division
-import httplib2
 import json
 import zlib
 import zipfile
@@ -11,6 +10,9 @@ import time
 import re
 import sys
 import datetime
+import atexit
+
+import httplib2
 from tzlocal import get_localzone
 import requests
 from termcolor import cprint
@@ -21,6 +23,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import TimeoutException
 from bs4 import BeautifulSoup
 
+
 requests.adapters.DEFAULT_RETRIES = 10
 
 h = httplib2.Http(".cache")
@@ -29,6 +32,7 @@ facebook_username = ""
 facebook_password = ""
 
 global uid
+global conn
 
 username = ""
 internetAccess = True
@@ -47,6 +51,16 @@ chromeOptions = webdriver.ChromeOptions()
 prefs = {"profile.managed_default_content_settings.images": 2}
 chromeOptions.add_experimental_option("prefs", prefs)
 driver = webdriver.Chrome(chrome_options=chromeOptions)
+
+
+def cleanup():
+    global conn
+    global driver
+    if conn:
+        conn.close()
+    if driver:
+        driver.close()
+        driver.quit()
 
 
 def createDatabase():
@@ -69,10 +83,31 @@ def createDatabase():
     c.execute(sql6)
     c.execute(sql7)
     conn.commit()
+    conn.close()
 
 
-createDatabase()
-conn = sqlite3.connect('facebook.db')
+def initdatabase():
+    global conn
+    if not os.path.lexists('facebook.db'):
+        createDatabase()
+        conn = sqlite3.connect('facebook.db')
+    else:
+        conn = sqlite3.connect('facebook.db')
+
+
+def appsinfogather(apps):
+    if not os.path.lexists('infodb.json'):
+        return False
+    result = []
+    apps2 = [w.lower() for w in apps]
+    del w
+    dbfile = open('infodb.json', 'r').read()
+    database = json.loads(dbfile)
+    for k, x in database.items():
+        for s in x:
+            if any(s in q for q in apps2):
+                result.append(k)
+    return result
 
 
 def createMaltego(username):
@@ -93,6 +128,8 @@ def createMaltego(username):
     counter1 = 1
     counter2 = 0
     userlist = []
+
+    global conn
 
     c = conn.cursor()
     c.execute('select userName from friends where sourceUID=?', (uid,))
@@ -337,6 +374,7 @@ def loginFacebook(driver):
 
 
 def write2Database(dbName, dataList):
+    global conn
     try:
         cprint("[*] Writing " + str(len(dataList)) + " record(s) to database table: " + dbName, "white")
         #print "[*] Writing "+str(len(dataList))+" record(s) to database table: "+dbName
@@ -472,6 +510,7 @@ def parseLikesPosts(id):
 
 
 def parseTimeline(html, username):
+    global conn
     soup = BeautifulSoup(html)
     tlTime = soup.findAll("abbr")
     temp123 = soup.findAll("div", {"role": "article"})
@@ -505,7 +544,6 @@ def parseTimeline(html, username):
                 #print tlLink.strip()
                 tlLink = tlLink.replace("?stream_ref=10", "")
                 pageID = tlLink.split("/")
-
 
                 parsePost(pageID[3], username)
                 peopleIDLikes = parseLikesPosts(pageID[3])
@@ -702,8 +740,8 @@ def parseTimeline(html, username):
                 #Date First followed by Username
                 reportFile.write(
                     normalize(i[4]) + '\t' + normalize(i[3]) + '\t' + normalize(i[2]) + '\t' + normalize(i[1]) + '\n')
-            #Username followed by Date
-            #reportFile.write(normalize(i[4])+'\t'+normalize(i[3])+'\t'+normalize(i[2])+'\t'+normalize(i[1])+'\n')
+                #Username followed by Date
+                #reportFile.write(normalize(i[4])+'\t'+normalize(i[3])+'\t'+normalize(i[2])+'\t'+normalize(i[1])+'\n')
         print '\n'
     except IndexError:
         pass
@@ -1001,15 +1039,13 @@ def downloadPagesLiked(driver, userid):
     driver.get('https://www.facebook.com/search/' + str(userid) + '/pages-liked')
     if "Sorry, we couldn't find any results for this search." in driver.page_source:
         print "Pages liked list is hidden"
-    lenOfPage = driver.execute_script(
-        "window.scrollTo(0, document.body.scrollHeight);var lenOfPage=document.body.scrollHeight;return lenOfPage;")
+        return False
     match = False
     while (match == False):
+        match = False
+        lenOfPage = driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
         time.sleep(3)
-        lastCount = lenOfPage
-        lenOfPage = driver.execute_script(
-            "window.scrollTo(0, document.body.scrollHeight);var lenOfPage=document.body.scrollHeight;return lenOfPage;")
-        if lastCount == lenOfPage:
+        if re.search(r'<div class="(.*)">End of results</div>', driver.page_source, re.IGNORECASE):
             match = True
     return driver.page_source
 
@@ -1040,15 +1076,12 @@ def downloadAppsUsed(driver, userid):
         print "[!] Apps used list is hidden"
         return ""
     else:
-        lenOfPage = driver.execute_script(
-            "window.scrollTo(0, document.body.scrollHeight);var lenOfPage=document.body.scrollHeight;return lenOfPage;")
+        #lenOfPage = driver.execute_script("window.scrollTo(0, document.body.scrollHeight);var lenOfPage=document.body.scrollHeight;return lenOfPage;") it will be used for blank tests
         match = False
         while (match == False):
             time.sleep(3)
-            lastCount = lenOfPage
-            lenOfPage = driver.execute_script(
-                "window.scrollTo(0, document.body.scrollHeight);var lenOfPage=document.body.scrollHeight;return lenOfPage;")
-            if lastCount == lenOfPage:
+            lenOfPage = driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
+            if re.search(r'<div class="(.*)">End of results</div>', driver.page_source, re.IGNORECASE):
                 match = True
         return driver.page_source
 
@@ -1639,7 +1672,7 @@ def parseVideosBy(html):
     return tempList
 
 
-def parseAppsUsed(html):
+def parseAppsUsed(html):  #todo parse and insert application related data to sql database
     soup = BeautifulSoup(html)
     appsData = soup.findAll("div", {"class": "_zs fwb"})
     tempList = []
@@ -1649,6 +1682,7 @@ def parseAppsUsed(html):
 
 
 def sidechannelFriends(uid):
+    global conn
     userList = []
     c = conn.cursor()
     c.execute('select distinct username from photosLiked where sourceUID=?', (uid,))
@@ -1677,6 +1711,7 @@ def sidechannelFriends(uid):
 
 def getFriends(uid):
     userList = []
+    global conn
     c = conn.cursor()
     c.execute('select username from friends where sourceUID=?', (uid,))
     dataList1 = []
@@ -1812,7 +1847,8 @@ def mainProcess(username):
     username = username.strip()
     print "[*] Username:\t" + str(username)
     global uid
-
+    global conn
+    initdatabase()
     loginFacebook(driver)
     uid = convertUser2ID2(driver, username)
     if not uid:
@@ -1824,26 +1860,15 @@ def mainProcess(username):
     filename = username + '_apps.htm'
     if not os.path.lexists(filename):
         print "[*] Caching Facebook Apps Used By: " + username
-        html = downloadAppsUsed(driver, uid)
+        html = downloadAppsUsed(driver, uid)  #todo check for blank page
         text_file = open(filename, "w")
         text_file.write(html.encode('utf8'))
         text_file.close()
     else:
         html = open(filename, 'r').read()
     data1 = parseAppsUsed(html)
-    result = ""
-    for x in data1:
-        print x
-        x = x.lower()
-        if "blackberry" in x:
-            result += "[*] User is using a Blackberry device\n"
-        if "android" in x:
-            result += "[*] User is using an Android device\n"
-        if "ios" in x or "ipad" in x or "iphone" in x:
-            result += "[*] User is using an iOS Apple device\n"
-        if "samsung" in x:
-            result += "[*] User is using a Samsung Android device\n"
-    print result
+    print '[*] Found Intel:'
+    print "\n".join(appsinfogather(data1))  #todo check for false return
 
     #Caching Pages Liked - Start
     filename = username + '_pages.htm'
@@ -2016,8 +2041,8 @@ def mainProcess(username):
                 write2Database('friendsDetails', tmpStr)
             except:
                 continue
-            #tmpInfoStr.append([uid,str(normalize(i)),str(normalize(userInfoList[0])),str(normalize(userInfoList[1])),str(normalize(userInfoList[2])),str(normalize(userInfoList[3])),str(normalize(userInfoList[4])),str(normalize(userInfoList[5])),str(normalize(userInfoList[6]))])
-            #tmpInfoStr.append([i[1],userInfoList[0],userInfoList[1],userInfoList[2],userInfoList[3],userInfoList[4],userInfoList[5],userInfoList[6]])
+                #tmpInfoStr.append([uid,str(normalize(i)),str(normalize(userInfoList[0])),str(normalize(userInfoList[1])),str(normalize(userInfoList[2])),str(normalize(userInfoList[3])),str(normalize(userInfoList[4])),str(normalize(userInfoList[5])),str(normalize(userInfoList[6]))])
+                #tmpInfoStr.append([i[1],userInfoList[0],userInfoList[1],userInfoList[2],userInfoList[3],userInfoList[4],userInfoList[5],userInfoList[6]])
 
     #cprint("[*] Writing "+str(len(dataList))+" record(s) to database table: "+dbName,"white")
     cprint("[*] Report has been written to: " + str(reportFileName), "white")
@@ -2032,15 +2057,12 @@ def mainProcess(username):
 
 def options(arguments):
     user = ""
-    count = 0
-    for arg in arguments:
+    for index, arg in enumerate(arguments):
         if arg == "-user":
-            count += 1
-            user = arguments[count + 1]
+            user = arguments[index + 1]
         if arg == "-report":
-            count += 1
             global reportFileName
-            reportFileName = arguments[count + 1]
+            reportFileName = arguments[index + 1]
     mainProcess(user)
 
 
@@ -2073,29 +2095,29 @@ def showhelp():
     print "	MMMMMMMMMIMMMMMMMMMMMMMMMMMM8IMMMMMMMMMM"
 
     print """
-	#####################################################
-	#                  fbStalker.py                 #
-	#               [Trustwave Spiderlabs]              #
-	#####################################################
-	Usage: python fbStalker.py [OPTIONS]
+    #####################################################
+    #                  fbStalker.py                     #
+    #               [Trustwave Spiderlabs]              #
+    #####################################################
+    Usage: python fbStalker.py [OPTIONS]
 
-	[OPTIONS]
+    [OPTIONS]
 
-	-user   [Facebook Username]
-	-report [Filename]
-	"""
+    -user   [Facebook Username]
+    -report [Filename]
+    """
 
+
+atexit.register(cleanup)
 
 if __name__ == '__main__':
     if len(sys.argv) <= 1:
         showhelp()
         driver.close()
-        driver.quit
-        conn.close()
+        driver.quit()
         sys.exit()
     else:
         if len(facebook_username) < 1 or len(facebook_password) < 1:
             print "[*] Please fill in 'facebook_username' and 'facebook_password' before continuing."
             sys.exit()
-        options(sys.argv)
- 
+    options(sys.argv)
